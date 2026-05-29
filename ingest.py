@@ -323,7 +323,7 @@ if __name__ == "__main__":
     # INGEST DOCUMENTS
     # -----------------------------------------------------
 
-    ingestion_service.ingest_documents()
+    #ingestion_service.ingest_documents()
 
     # -----------------------------------------------------
     # TEST QUERIES
