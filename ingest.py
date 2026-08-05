@@ -329,7 +329,7 @@ if __name__ == "__main__":
     # TEST QUERIES
     # -----------------------------------------------------
 
-ingestion_service.test_query(
-    query="list all the projects gowtham was involved in",
-    category="projects"
-)
+    ingestion_service.test_query(
+        query="list all the projects gowtham was involved in",
+        category="projects"
+    )

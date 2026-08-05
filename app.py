@@ -27,6 +27,10 @@ st.markdown(
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
+html, body, [class*="css"] {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
 :root {
     --navy: #101827;
     --navy-soft: #1f2a44;
@@ -45,7 +49,7 @@ st.markdown(
 }
 
 html, body, [class*="css"] {
-    font-family: 'Inter', sans-serif;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     background: var(--page);
     color: var(--ink-900);
 }
@@ -712,6 +716,13 @@ st.markdown(
 # WELCOME STATE
 # =========================================================
 
+STARTER_QUESTIONS = [
+    "Compare Gowtham's leadership experience with his technical delivery depth.",
+    "Summarize Gowtham's major BI, data platform, and AI projects.",
+    "Identify Gowtham's certifications and domain strengths.",
+    "Create a concise executive profile narrative for Gowtham.",
+]
+
 if not st.session_state.messages:
     st.markdown(
         """
@@ -722,15 +733,19 @@ if not st.session_state.messages:
                 experience, certifications, or career journey.
             </div>
         </div>
-        <div class="starter-grid">
-            <div class="starter-item">Compare leadership experience with technical delivery depth.</div>
-            <div class="starter-item">Summarize major BI, data platform, and AI projects.</div>
-            <div class="starter-item">Identify certifications and domain strengths.</div>
-            <div class="starter-item">Create a concise executive profile narrative.</div>
-        </div>
         """,
         unsafe_allow_html=True,
     )
+    starter_cols = st.columns(4)
+    for col, question in zip(starter_cols, STARTER_QUESTIONS):
+        with col:
+            st.button(
+                question,
+                key=f"starter_{question[:30]}",
+                on_click=queue_sidebar_question,
+                args=(question,),
+                use_container_width=True,
+            )
 
 
 # =========================================================
@@ -749,35 +764,53 @@ user_input = st.chat_input("Ask about Gowtham's experience, skills, projects..."
 question = user_input or st.session_state.pending_question
 
 if question:
-    st.session_state.pending_question = None
+    question = question.strip()
 
-    st.session_state.messages.append({
-        "role": "user",
-        "content": question,
-    })
-    render_message("user", question)
+    if not question:
+        st.warning("Please enter a question.")
+    elif len(question) > 1000:
+        st.warning("Please keep your question under 1000 characters.")
+    else:
+        st.session_state.pending_question = None
 
-    thinking_placeholder = st.empty()
-    thinking_placeholder.markdown(
-        """
-        <div class="msg-wrapper assistant">
-            <div class="msg-icon assistant">GV</div>
-            <div class="msg-bubble assistant">
-                <div class="thinking">
-                    <span></span><span></span><span></span>
+        st.session_state.messages.append({"role": "user", "content": question})
+        render_message("user", question)
+
+        answer = None
+        try:
+            answer_container = st.empty()
+            answer_container.markdown(
+                """
+                <div class="msg-wrapper assistant">
+                    <div class="msg-icon assistant">GV</div>
+                    <div class="msg-bubble assistant">
+                        <div class="thinking">
+                            <span></span><span></span><span></span>
+                        </div>
+                    </div>
                 </div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+                """,
+                unsafe_allow_html=True,
+            )
+            chunks = []
+            for chunk in st.session_state.graph.stream(question):
+                chunks.append(chunk)
+                partial = "".join(chunks)
+                rendered = MARKDOWN_RENDERER.render(partial)
+                answer_container.markdown(
+                    f"""
+                    <div class="msg-wrapper assistant">
+                        <div class="msg-icon assistant">GV</div>
+                        <div class="msg-bubble assistant">{rendered}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            answer = "".join(chunks)
+        except Exception:
+            answer_container.empty()
+            st.session_state.messages.pop()
+            st.error("Something went wrong. Please try again in a moment.")
 
-    answer = st.session_state.graph.run(question)
-
-    thinking_placeholder.empty()
-    render_message("assistant", answer)
-
-    st.session_state.messages.append({
-        "role": "assistant",
-        "content": answer,
-    })
+        if answer:
+            st.session_state.messages.append({"role": "assistant", "content": answer})

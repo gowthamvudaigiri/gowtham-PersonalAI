@@ -201,11 +201,14 @@ Context:
 
         results = self.vector_store.similarity_search(
             query=state["question"],
-            k=1,
+            k=4,
             filter=where_filter
         )
 
-        context = results[0].page_content if results else "No relevant information found."
+        context = (
+            "\n\n---\n\n".join(r.page_content for r in results)
+            if results else "No relevant information found."
+        )
 
         print(f"\n[Retrieval]")
         print(f"Filter   : {f'category = {category}' if category else 'none'}")
@@ -284,6 +287,33 @@ Context:
         print("----------------------------------------")
 
         return result["answer"]
+
+    # =====================================================
+    # STREAM
+    # =====================================================
+
+    def stream(self, question: str):
+        """
+        Run intent detection and retrieval synchronously,
+        then stream the generation step token by token.
+        Yields string chunks as they arrive from the LLM.
+        """
+
+        state: GraphState = {
+            "question": question,
+            "category": None,
+            "context": None,
+            "answer": None,
+        }
+        state = self.detect_intent(state)
+        state = self.retrieve(state)
+
+        chain = self.prompt | self.llm | self.output_parser
+        for chunk in chain.stream({
+            "context": state["context"],
+            "question": question,
+        }):
+            yield chunk
 
 
 # =========================================================
