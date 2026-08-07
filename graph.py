@@ -1,11 +1,14 @@
 import os
-from typing import TypedDict, Optional
+import uuid
+from typing import TypedDict, Optional, List
 
 from dotenv import load_dotenv
 
 from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_chroma import Chroma
 from langchain_openai import OpenAIEmbeddings
 
@@ -31,8 +34,10 @@ load_dotenv()
 class GraphState(TypedDict):
     question: str
     category: Optional[str]
-    context: Optional[str]
-    answer: Optional[str]
+    context:  Optional[str]
+    answer:   Optional[str]
+    history:  Optional[List[dict]]  # [{"role": "user"|"assistant", "content": str}]
+    summary:  Optional[str]         # compressed summary of older turns
 
 
 # =========================================================
@@ -99,18 +104,22 @@ class ProfileAssistantGraph:
         self.prompt = ChatPromptTemplate.from_messages([
             (
                 "system",
-                """You are a professional AI assistant representing Gowtham Vudaigiri, 
+                """You are a professional AI assistant representing Gowtham Vudaigiri,
 a senior Data Engineering and BI leader with 19+ years of experience.
 
-Your job is to answer questions about Gowtham accurately and professionally, 
-using only the context provided. Speak in third person about Gowtham.
+Your job is to answer questions about Gowtham accurately and professionally.
+Speak in third person about Gowtham.
 
-If the context does not contain enough information to answer the question, 
-say so honestly rather than making things up.
+Use the context provided below as your primary source. For follow-up questions,
+you may also draw on information from the conversation history above.
+
+If neither the context nor the conversation history contains enough information
+to answer the question, say so honestly rather than making things up.
 
 Context:
 {context}"""
             ),
+            MessagesPlaceholder(variable_name="history", optional=True),
             (
                 "human",
                 "{question}"
@@ -151,6 +160,9 @@ Context:
         # ---------------------------------------------
 
         self.graph = self._build_graph()
+
+        # Last run_id from stream() — used by app.py to link feedback to traces
+        self.last_run_id = None
 
     # =====================================================
     # NODE 1 — DETECT INTENT
@@ -289,13 +301,75 @@ Context:
         return result["answer"]
 
     # =====================================================
+    # HISTORY HELPERS
+    # =====================================================
+
+    def _build_history_context(
+        self,
+        history: Optional[List[dict]],
+        summary: Optional[str]
+    ) -> List:
+        """
+        Convert raw message dicts + optional summary into LangChain message objects.
+        Summary (if present) is injected as a SystemMessage before recent turns.
+        """
+        messages = []
+
+        if summary:
+            messages.append(SystemMessage(
+                content=f"Earlier in this conversation: {summary}"
+            ))
+
+        for msg in (history or []):
+            if msg["role"] == "user":
+                messages.append(HumanMessage(content=msg["content"]))
+            elif msg["role"] == "assistant":
+                messages.append(AIMessage(content=msg["content"]))
+
+        return messages
+
+    def _should_summarize(self, history: List[dict]) -> bool:
+        """
+        Returns True when the total character count of the history
+        exceeds ~12000 chars (≈3000 tokens at 4 chars/token).
+        """
+        total_chars = sum(len(m["content"]) for m in history)
+        return total_chars > 12000
+
+    def _summarize(self, history: List[dict]) -> str:
+        """
+        Compress the full conversation history into a short summary.
+        Reuses self.llm — synchronous, not streamed.
+        """
+        conversation_text = "\n".join(
+            f"{m['role'].upper()}: {m['content']}" for m in history
+        )
+        summarize_prompt = ChatPromptTemplate.from_messages([
+            (
+                "system",
+                "You are a conversation summarizer. Summarize the following "
+                "conversation in 3-5 concise sentences, preserving all key facts, "
+                "names, projects, and decisions mentioned."
+            ),
+            ("human", "{conversation}")
+        ])
+        chain = summarize_prompt | self.llm | self.output_parser
+        return chain.invoke({"conversation": conversation_text})
+
+    # =====================================================
     # STREAM
     # =====================================================
 
-    def stream(self, question: str):
+    def stream(
+        self,
+        question: str,
+        history: Optional[List[dict]] = None,
+        summary: Optional[str] = None
+    ):
         """
         Run intent detection and retrieval synchronously,
         then stream the generation step token by token.
+        Passes conversation history for multi-turn context.
         Yields string chunks as they arrive from the LLM.
         """
 
@@ -304,15 +378,26 @@ Context:
             "category": None,
             "context": None,
             "answer": None,
+            "history": history,
+            "summary": summary,
         }
         state = self.detect_intent(state)
         state = self.retrieve(state)
 
+        formatted_history = self._build_history_context(history, summary)
+
+        self.last_run_id = uuid.uuid4()
+        config = RunnableConfig(run_id=self.last_run_id)
+
         chain = self.prompt | self.llm | self.output_parser
-        for chunk in chain.stream({
-            "context": state["context"],
-            "question": question,
-        }):
+        for chunk in chain.stream(
+            {
+                "context": state["context"],
+                "question": question,
+                "history": formatted_history,
+            },
+            config=config,
+        ):
             yield chunk
 
 

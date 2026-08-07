@@ -7,6 +7,24 @@ from graph import ProfileAssistantGraph
 
 
 # =========================================================
+# LANGSMITH FEEDBACK HELPER
+# =========================================================
+
+def _send_feedback(run_id: str, score: int) -> None:
+    try:
+        from langsmith import Client as LangSmithClient
+        client = LangSmithClient()
+        client.create_feedback(
+            run_id=run_id,
+            key="user_feedback",
+            score=score,
+            feedback_source_type="app",
+        )
+    except Exception:
+        pass  # feedback failure must never break the chat
+
+
+# =========================================================
 # PAGE CONFIG
 # =========================================================
 
@@ -584,6 +602,15 @@ if "graph" not in st.session_state:
 if "pending_question" not in st.session_state:
     st.session_state.pending_question = None
 
+if "conversation_summary" not in st.session_state:
+    st.session_state.conversation_summary = None
+
+if "run_ids" not in st.session_state:
+    st.session_state.run_ids = []  # run_id per assistant message, in order
+
+if "feedback_given" not in st.session_state:
+    st.session_state.feedback_given = {}  # {message_index: score}
+
 
 def queue_sidebar_question(question: str) -> None:
     st.session_state.pending_question = question
@@ -650,6 +677,9 @@ with st.sidebar:
     if st.button("Clear conversation", key="clear_conversation"):
         st.session_state.messages = []
         st.session_state.pending_question = None
+        st.session_state.conversation_summary = None
+        st.session_state.run_ids = []
+        st.session_state.feedback_given = {}
         st.rerun()
 
     st.markdown(
@@ -752,8 +782,21 @@ if not st.session_state.messages:
 # RENDER CHAT HISTORY
 # =========================================================
 
-for message in st.session_state.messages:
+assistant_idx = 0
+for i, message in enumerate(st.session_state.messages):
     render_message(message["role"], message["content"])
+    if message["role"] == "assistant":
+        if i not in st.session_state.feedback_given:
+            sentiment = st.feedback("thumbs", key=f"feedback_{i}")
+            if sentiment is not None:
+                score = 1 if sentiment == "thumbsUp" else 0
+                st.session_state.feedback_given[i] = score
+                if assistant_idx < len(st.session_state.run_ids):
+                    _send_feedback(
+                        run_id=st.session_state.run_ids[assistant_idx],
+                        score=score,
+                    )
+        assistant_idx += 1
 
 
 # =========================================================
@@ -776,6 +819,16 @@ if question:
         st.session_state.messages.append({"role": "user", "content": question})
         render_message("user", question)
 
+        # Compress history if it has grown too large
+        if st.session_state.graph._should_summarize(st.session_state.messages):
+            st.session_state.conversation_summary = st.session_state.graph._summarize(
+                st.session_state.messages
+            )
+            st.session_state.messages = st.session_state.messages[-4:]
+
+        # Pass the last 6 messages as context (excluding the just-appended user msg)
+        recent_history = st.session_state.messages[:-1][-6:]
+
         answer = None
         try:
             answer_container = st.empty()
@@ -793,7 +846,11 @@ if question:
                 unsafe_allow_html=True,
             )
             chunks = []
-            for chunk in st.session_state.graph.stream(question):
+            for chunk in st.session_state.graph.stream(
+                question,
+                history=recent_history,
+                summary=st.session_state.conversation_summary,
+            ):
                 chunks.append(chunk)
                 partial = "".join(chunks)
                 rendered = MARKDOWN_RENDERER.render(partial)
@@ -814,3 +871,4 @@ if question:
 
         if answer:
             st.session_state.messages.append({"role": "assistant", "content": answer})
+            st.session_state.run_ids.append(str(st.session_state.graph.last_run_id))
