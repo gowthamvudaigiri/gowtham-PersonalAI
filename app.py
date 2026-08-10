@@ -591,7 +591,7 @@ MARKDOWN_RENDERER = MarkdownIt(
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-if "graph" not in st.session_state:
+if "graph" not in st.session_state or not hasattr(st.session_state.graph, "_suggest_followups"):
     st.session_state.graph = ProfileAssistantGraph(
         persist_directory="./chroma_db",
         collection_name="gowtham_profile",
@@ -887,7 +887,10 @@ if question:
         if answer:
             st.session_state.messages.append({"role": "assistant", "content": answer})
             st.session_state.run_ids.append(str(st.session_state.graph.last_run_id))
-            followups = st.session_state.graph._suggest_followups(question, answer)
-            if followups:
-                msg_idx = len(st.session_state.messages) - 1
-                st.session_state.suggestions[msg_idx] = followups
+            try:
+                followups = st.session_state.graph._suggest_followups(question, answer)
+                if followups:
+                    msg_idx = len(st.session_state.messages) - 1
+                    st.session_state.suggestions[msg_idx] = followups
+            except Exception:
+                pass
