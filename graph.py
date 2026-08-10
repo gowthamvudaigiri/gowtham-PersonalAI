@@ -379,6 +379,32 @@ Context:
         chain = summarize_prompt | self.llm | self.output_parser
         return chain.invoke({"conversation": conversation_text})
 
+    def _suggest_followups(self, question: str, answer: str) -> List[str]:
+        """
+        Generate 2-3 follow-up questions based on the last Q&A turn.
+        Returns [] silently on any failure — never blocks the chat.
+        """
+        import json
+        try:
+            suggest_prompt = ChatPromptTemplate.from_messages([
+                (
+                    "system",
+                    "You are a helpful assistant for Gowtham Vudaigiri's AI profile. "
+                    "Given a question and answer about Gowtham's professional background, "
+                    "suggest exactly 2 or 3 short follow-up questions a recruiter or hiring "
+                    "manager would naturally ask next. Questions must be about Gowtham only. "
+                    "Return ONLY a valid JSON array of strings, "
+                    "e.g. [\"Q1\", \"Q2\", \"Q3\"]. No explanation, no numbering, no markdown."
+                ),
+                ("human", "Question: {question}\n\nAnswer: {answer}")
+            ])
+            chain = suggest_prompt | self.llm | self.output_parser
+            raw = chain.invoke({"question": question, "answer": answer}).strip()
+            suggestions = json.loads(raw)
+            return [s for s in suggestions if isinstance(s, str)][:3]
+        except Exception:
+            return []
+
     # =====================================================
     # STREAM
     # =====================================================

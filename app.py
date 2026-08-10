@@ -611,6 +611,9 @@ if "run_ids" not in st.session_state:
 if "feedback_given" not in st.session_state:
     st.session_state.feedback_given = {}  # {message_index: score}
 
+if "suggestions" not in st.session_state:
+    st.session_state.suggestions = {}  # {message_index: [str, str, str]}
+
 
 def queue_sidebar_question(question: str) -> None:
     st.session_state.pending_question = question
@@ -680,6 +683,7 @@ with st.sidebar:
         st.session_state.conversation_summary = None
         st.session_state.run_ids = []
         st.session_state.feedback_given = {}
+        st.session_state.suggestions = {}
         st.rerun()
 
     st.markdown(
@@ -796,6 +800,17 @@ for i, message in enumerate(st.session_state.messages):
                         run_id=st.session_state.run_ids[assistant_idx],
                         score=score,
                     )
+        if i in st.session_state.suggestions:
+            suggestion_cols = st.columns(len(st.session_state.suggestions[i]))
+            for col, suggestion in zip(suggestion_cols, st.session_state.suggestions[i]):
+                with col:
+                    st.button(
+                        suggestion,
+                        key=f"suggestion_{i}_{suggestion[:25]}",
+                        on_click=queue_sidebar_question,
+                        args=(suggestion,),
+                        use_container_width=True,
+                    )
         assistant_idx += 1
 
 
@@ -872,3 +887,7 @@ if question:
         if answer:
             st.session_state.messages.append({"role": "assistant", "content": answer})
             st.session_state.run_ids.append(str(st.session_state.graph.last_run_id))
+            followups = st.session_state.graph._suggest_followups(question, answer)
+            if followups:
+                msg_idx = len(st.session_state.messages) - 1
+                st.session_state.suggestions[msg_idx] = followups
